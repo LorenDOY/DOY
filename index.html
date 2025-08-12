@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DOY • Panel en vivo (Polygon + Etherscan V2)</title>
+  <style>
+    :root{--bg:#0b0f14;--card:#121823;--muted:#9fb0c2;--text:#e7f0f8}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial;background:var(--bg);color:var(--text)}
+    .wrap{max-width:920px;margin:0 auto;padding:24px}
+    .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,.25);margin-top:12px}
+    h1{font-size:24px;margin:0 0 12px 0}
+    h2{font-size:16px;margin:0 0 8px 0;color:var(--muted)}
+    .pill{display:inline-flex;align-items:center;gap:6px;background:#0f2533;color:#a7d5ff;border:1px solid #1e3442;border-radius:999px;padding:4px 10px;font-size:12px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+    .big{font-size:28px;font-weight:700}
+    .muted{color:var(--muted)}
+    .mono{font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .btn{background:#163a2c;color:#b9ffd6;border:1px solid #245a43;border-radius:10px;padding:8px 12px;cursor:pointer}
+    input{background:#0e141d;color:var(--text);border:1px solid #223243;border-radius:10px;padding:8px}
+    a{color:#9ad3ff;text-decoration:none}
+    footer{margin-top:22px;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row" style="justify-content:space-between">
+      <h1>DOY • Transparencia</h1>
+      <span class="pill">Red: Polygon Mainnet (chainid 137)</span>
+    </div>
+
+    <div class="card">
+      <h2>Contrato oficial de $DOY</h2>
+      <div class="mono" id="addr-contract" style="font-size:14px;margin:6px 0">0x…</div>
+      <div class="row">
+        <a class="pill" id="pscan" target="_blank">Ver en PolygonScan</a>
+        <a class="pill" id="bscout" target="_blank">Ver en Blockscout</a>
+      </div>
+      <p class="muted" style="margin-top:10px">Mostramos métricas públicas. Las direcciones internas no se exponen en pantalla.</p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Saldo Solidario (DOY)</h2>
+        <div class="big" id="solidario-doy">—</div>
+        <div class="muted">Actualiza cada 60s</div>
+      </div>
+      <div class="card">
+        <h2>Saldo Solidario (USD)</h2>
+        <div class="big" id="solidario-usd">—</div>
+        <div class="muted">DOY × precio actual</div>
+      </div>
+      <div class="card">
+        <h2>Supply total (DOY)</h2>
+        <div class="big" id="total-supply">—</div>
+        <div class="muted">Desde el contrato</div>
+      </div>
+      <div class="card">
+        <h2>Precio actual (DOY → USDC)</h2>
+        <div class="row">
+          <input id="price" type="number" step="0.0000001" placeholder="Ej: 0.5000" style="flex:1;min-width:140px" />
+          <button class="btn" id="savePrice">Guardar</button>
+        </div>
+        <div class="muted" style="margin-top:6px">Manual hasta listar en un DEX. Luego lo hacemos automático.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Estado</h2>
+      <div id="err" class="muted">Cargando…</div>
+    </div>
+
+    <footer>
+      <div class="muted">© DOY – Transparencia on-chain (Etherscan V2). No se guarda información del usuario.</div>
+    </footer>
+  </div>
+
+<script>
+// ==================== CONFIG ====================
+const CONTRACT = '0xda16Db4Cc633A2f23db1bB499B0995e4F9BC7037'; // contrato DOY
+const DECIMALS = 18; // DOY usa 18 decimales
+// Solo para cálculo de saldo solidario (no se muestra en UI):
+const SAFE_SOLIDARIO = '0xD5524A34A4E7F64dcc0B99d43b97f1f62BFa9c18';
+
+// Exploradores
+const POLYGONSCAN = 'https://polygonscan.com';
+const BLOCKSCOUT = 'https://blockscout.com/polygon/mainnet';
+
+// Etherscan V2 Multichain API
+const API_V2 = 'https://api.etherscan.io/v2/api';
+const CHAIN_ID = 137; // Polygon Mainnet
+const API_KEY = 'QWHZZP745AA3ERX3NBKYHAIFRXPKG3ZHRI'; // tu key fija
+
+const fmt = n => new Intl.NumberFormat('es-AR', { maximumFractionDigits: 4 }).format(n);
+
+function setLinks(){
+  document.getElementById('addr-contract').textContent = CONTRACT;
+  document.getElementById('pscan').href = `${POLYGONSCAN}/address/${CONTRACT}`;
+  document.getElementById('bscout').href = `${BLOCKSCOUT}/address/${CONTRACT}`;
+}
+
+async function apiFetch(params){
+  const url = API_V2 + '?' + new URLSearchParams({ chainid: CHAIN_ID, ...params, apikey: API_KEY }).toString();
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('API ' + res.status);
+  const j = await res.json();
+  if(j.status !== '1') throw new Error(j.result || j.message || 'Respuesta inválida');
+  return j.result;
+}
+
+async function getTotalSupply(){
+  const r = await apiFetch({ module:'stats', action:'tokensupply', contractaddress: CONTRACT });
+  return Number(r) / 10**DECIMALS;
+}
+
+async function getSolidarioBalance(){
+  const r = await apiFetch({ module:'account', action:'tokenbalance', contractaddress: CONTRACT, address: SAFE_SOLIDARIO, tag:'latest' });
+  return Number(r) / 10**DECIMALS;
+}
+
+async function refresh(){
+  const err = document.getElementById('err');
+  err.textContent = 'Actualizando…';
+  try{
+    const [total, sol] = await Promise.all([ getTotalSupply(), getSolidarioBalance() ]);
+
+    document.getElementById('total-supply').textContent = fmt(total) + ' DOY';
+    document.getElementById('solidario-doy').textContent = fmt(sol) + ' DOY';
+
+    const price = Number(localStorage.getItem('doy_price') || 0);
+    if(price){
+      document.getElementById('price').value = price;
+      document.getElementById('solidario-usd').textContent = fmt(sol * price) + ' USDC';
+    } else {
+      document.getElementById('solidario-usd').textContent = '—';
+    }
+
+    err.textContent = 'OK';
+  }catch(e){
+    console.error(e);
+    err.textContent = e.message || 'Error al consultar Etherscan V2';
+  }
+}
+
+// Guardar precio manual (solo local)
+const priceEl = document.getElementById('price');
+const saveBtn = document.getElementById('savePrice');
+saveBtn.addEventListener('click', ()=>{
+  const p = Number(priceEl.value||0);
+  localStorage.setItem('doy_price', String(p));
+  refresh();
+});
+
+setLinks();
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>
